@@ -88,6 +88,22 @@
             border-radius: 8px;
             padding: 15px;
             border: 1px solid #4c6b83;
+            display: flex;
+            gap: 15px;
+        }
+        .game-thumbnail {
+            flex-shrink: 0;
+            width: 64px;
+            height: 64px;
+        }
+        .game-thumbnail img {
+            width: 100%;
+            height: 100%;
+            border-radius: 4px;
+            object-fit: cover;
+        }
+        .game-content {
+            flex: 1;
         }
         .game-title {
             color: #66c0f4;
@@ -97,6 +113,19 @@
         .game-stats {
             font-size: 14px;
             line-height: 1.4;
+        }
+        .achievement-bar {
+            background-color: #2a475e;
+            border-radius: 10px;
+            height: 8px;
+            margin: 5px 0;
+            overflow: hidden;
+        }
+        .achievement-progress {
+            background-color: #66c0f4;
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.3s ease;
         }
         .loading {
             text-align: center;
@@ -133,8 +162,20 @@
         </div>
 
         <div id="filters-section" class="filters-section hidden">
-            <h3>Filter Results</h3>
+            <h3>Filter & Sort Results</h3>
             <div class="filter-controls">
+                <div class="filter-group">
+                    <label for="sort-by">Sort by:</label>
+                    <select id="sort-by">
+                        <option value="total-playtime">Total Playtime (High to Low)</option>
+                        <option value="total-playtime-asc">Total Playtime (Low to High)</option>
+                        <option value="name">Game Name (A-Z)</option>
+                        <option value="name-desc">Game Name (Z-A)</option>
+                        <option value="friend1-playtime">Friend 1 Playtime</option>
+                        <option value="friend2-playtime">Friend 2 Playtime</option>
+                        <option value="achievement-completion">Achievement Completion %</option>
+                    </select>
+                </div>
                 <div class="filter-group">
                     <label>
                         <input type="checkbox" id="multiplayer-filter">
@@ -186,26 +227,32 @@
             
             try {
                 // Resolve Steam IDs using our backend API
-                const steamId1 = await resolveSteamId(friend1Input);
-                const steamId2 = await resolveSteamId(friend2Input);
+                steamId1Global = await resolveSteamId(friend1Input);
+                steamId2Global = await resolveSteamId(friend2Input);
                 
-                console.log('Resolved Steam IDs:', steamId1, steamId2);
+                console.log('Resolved Steam IDs:', steamId1Global, steamId2Global);
                 
                 // Get games for both friends using our backend API
                 const [games1, games2] = await Promise.all([
-                    getUserGames(steamId1),
-                    getUserGames(steamId2)
+                    getUserGames(steamId1Global),
+                    getUserGames(steamId2Global)
                 ]);
                 
                 console.log('Games fetched:', games1.length, games2.length);
                 
                 // Find common games
-                const commonGames = findCommonGames(games1, games2);
+                currentGames = findCommonGames(games1, games2);
                 
-                console.log('Common games found:', commonGames.length);
+                console.log('Common games found:', currentGames.length);
+                
+                // Fetch achievement data for common games (limit to first 20 to avoid rate limits)
+                await fetchAchievementData(currentGames.slice(0, 20));
+                
+                // Fetch store details for multiplayer detection (limit to first 50 games)
+                await fetchStoreDetails(currentGames.slice(0, 50));
                 
                 // Display results
-                displayResults(commonGames);
+                displayResults(currentGames);
                 
                 // Show filters
                 document.getElementById('filters-section').classList.remove('hidden');
@@ -250,6 +297,11 @@
             }
         }
         
+        // Global variables to store data
+        let currentGames = [];
+        let steamId1Global = '';
+        let steamId2Global = '';
+
         // Function to find common games between two friends
         function findCommonGames(games1, games2) {
             const games1Map = new Map(games1.map(game => [game.appid, game]));
@@ -264,7 +316,8 @@
                         playtime_friend1: Math.round(game1.playtime_forever / 60), // Convert to hours
                         playtime_friend2: Math.round(game2.playtime_forever / 60),
                         total_playtime: Math.round((game1.playtime_forever + game2.playtime_forever) / 60),
-                        img_icon_url: game2.img_icon_url || game1.img_icon_url
+                        img_icon_url: game2.img_icon_url || game1.img_icon_url,
+                        achievement_completion_avg: 0 // Will be populated later
                     });
                 }
             });
@@ -295,25 +348,140 @@
             setupFilters(games);
         }
         
+        // Function to fetch achievement data for games
+        async function fetchAchievementData(games) {
+            for (let game of games) {
+                try {
+                    const [ach1Response, ach2Response] = await Promise.all([
+                        fetch(`/api/achievements/${steamId1Global}/${game.appid}`),
+                        fetch(`/api/achievements/${steamId2Global}/${game.appid}`)
+                    ]);
+                    
+                    const [ach1Data, ach2Data] = await Promise.all([
+                        ach1Response.json(),
+                        ach2Response.json()
+                    ]);
+                    
+                    let friend1Percentage = 0;
+                    let friend2Percentage = 0;
+                    
+                    if (ach1Data.success) {
+                        friend1Percentage = ach1Data.percentage;
+                        game.friend1_achievements = ach1Data;
+                    }
+                    
+                    if (ach2Data.success) {
+                        friend2Percentage = ach2Data.percentage;
+                        game.friend2_achievements = ach2Data;
+                    }
+                    
+                    game.achievement_completion_avg = Math.round((friend1Percentage + friend2Percentage) / 2);
+                    
+                } catch (error) {
+                    console.warn(`Could not fetch achievement data for ${game.name}`);
+                    game.achievement_completion_avg = 0;
+                }
+                
+                // Small delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+        }
+
+        // Function to fetch store details for multiplayer detection
+        async function fetchStoreDetails(games) {
+            for (let game of games) {
+                try {
+                    const response = await fetch(`/api/storedetails/${game.appid}`);
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        game.isMultiplayer = data.isMultiplayer;
+                        game.categories = data.categories;
+                        game.genres = data.genres;
+                    } else {
+                        game.isMultiplayer = false;
+                    }
+                    
+                } catch (error) {
+                    console.warn(`Could not fetch store details for ${game.name}`);
+                    game.isMultiplayer = false;
+                }
+                
+                // Small delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+        }
+
+        // Function to sort games
+        function sortGames(games, sortBy) {
+            const sortedGames = [...games];
+            
+            switch (sortBy) {
+                case 'total-playtime':
+                    return sortedGames.sort((a, b) => b.total_playtime - a.total_playtime);
+                case 'total-playtime-asc':
+                    return sortedGames.sort((a, b) => a.total_playtime - b.total_playtime);
+                case 'name':
+                    return sortedGames.sort((a, b) => a.name.localeCompare(b.name));
+                case 'name-desc':
+                    return sortedGames.sort((a, b) => b.name.localeCompare(a.name));
+                case 'friend1-playtime':
+                    return sortedGames.sort((a, b) => b.playtime_friend1 - a.playtime_friend1);
+                case 'friend2-playtime':
+                    return sortedGames.sort((a, b) => b.playtime_friend2 - a.playtime_friend2);
+                case 'achievement-completion':
+                    return sortedGames.sort((a, b) => b.achievement_completion_avg - a.achievement_completion_avg);
+                default:
+                    return sortedGames;
+            }
+        }
+
         // Function to create a game card
         function createGameCard(game) {
             const card = document.createElement('div');
             card.className = 'game-card';
             card.dataset.name = game.name.toLowerCase();
             card.dataset.totalPlaytime = game.total_playtime;
+            card.dataset.friend1Playtime = game.playtime_friend1;
+            card.dataset.friend2Playtime = game.playtime_friend2;
+            card.dataset.achievementCompletion = game.achievement_completion_avg;
+            card.dataset.isMultiplayer = game.isMultiplayer || false;
             
             const imageUrl = game.img_icon_url 
                 ? `https://media.steampowered.com/steamcommunity/public/images/apps/${game.appid}/${game.img_icon_url}.jpg`
-                : '';
+                : 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjMzMzIi8+Cjx0ZXh0IHg9IjMyIiB5PSIzNiIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj7wn5qrPC90ZXh0Pgo8L3N2Zz4=';
+            
+            let achievementSection = '';
+            if (game.friend1_achievements || game.friend2_achievements) {
+                const friend1Pct = game.friend1_achievements ? game.friend1_achievements.percentage : 0;
+                const friend2Pct = game.friend2_achievements ? game.friend2_achievements.percentage : 0;
+                const avgPct = game.achievement_completion_avg;
+                
+                achievementSection = `
+                    <div style="margin: 8px 0;">
+                        <div><strong>Achievement Progress:</strong></div>
+                        <div style="font-size: 12px; margin: 2px 0;">Friend 1: ${friend1Pct}% | Friend 2: ${friend2Pct}% | Avg: ${avgPct}%</div>
+                        <div class="achievement-bar">
+                            <div class="achievement-progress" style="width: ${avgPct}%"></div>
+                        </div>
+                    </div>
+                `;
+            }
             
             card.innerHTML = `
-                <h3 class="game-title">${game.name}</h3>
-                <div class="game-stats">
-                    <div><strong>Friend 1 Playtime:</strong> ${game.playtime_friend1} hours</div>
-                    <div><strong>Friend 2 Playtime:</strong> ${game.playtime_friend2} hours</div>
-                    <div><strong>Total Playtime:</strong> ${game.total_playtime} hours</div>
-                    <div style="margin-top: 10px;">
-                        <a href="https://store.steampowered.com/app/${game.appid}" target="_blank" style="color: #66c0f4;">View on Steam</a>
+                <div class="game-thumbnail">
+                    <img src="${imageUrl}" alt="${game.name}" loading="lazy">
+                </div>
+                <div class="game-content">
+                    <h3 class="game-title">${game.name}</h3>
+                    <div class="game-stats">
+                        <div><strong>Friend 1 Playtime:</strong> ${game.playtime_friend1} hours</div>
+                        <div><strong>Friend 2 Playtime:</strong> ${game.playtime_friend2} hours</div>
+                        <div><strong>Total Playtime:</strong> ${game.total_playtime} hours</div>
+                        ${achievementSection}
+                        <div style="margin-top: 10px;">
+                            <a href="https://store.steampowered.com/app/${game.appid}" target="_blank" style="color: #66c0f4;">View on Steam</a>
+                        </div>
                     </div>
                 </div>
             `;
@@ -323,12 +491,27 @@
         
         // Function to setup filters
         function setupFilters(allGames) {
+            const sortBySelect = document.getElementById('sort-by');
             const multiplayerFilter = document.getElementById('multiplayer-filter');
             const achievementsFilter = document.getElementById('achievements-filter');
             const minPlaytimeFilter = document.getElementById('min-playtime');
             const searchFilter = document.getElementById('search-filter');
             
-            function applyFilters() {
+            function applyFiltersAndSort() {
+                // First sort the games
+                const sortBy = sortBySelect.value;
+                const sortedGames = sortGames(currentGames, sortBy);
+                
+                // Clear and rebuild the grid with sorted games
+                const gamesGrid = document.getElementById('games-grid');
+                gamesGrid.innerHTML = '';
+                
+                sortedGames.forEach(game => {
+                    const gameCard = createGameCard(game);
+                    gamesGrid.appendChild(gameCard);
+                });
+                
+                // Then apply filters
                 const cards = document.querySelectorAll('.game-card');
                 let visibleCount = 0;
                 
@@ -336,14 +519,15 @@
                     let show = true;
                     const gameName = card.dataset.name;
                     const totalPlaytime = parseInt(card.dataset.totalPlaytime);
+                    const achievementCompletion = parseInt(card.dataset.achievementCompletion);
                     
                     // Search filter
                     if (searchFilter.value && !gameName.includes(searchFilter.value.toLowerCase())) {
                         show = false;
                     }
                     
-                    // Multiplayer filter (basic keyword search)
-                    if (multiplayerFilter.checked && !gameName.includes('multi') && !gameName.includes('online') && !gameName.includes('co-op') && !gameName.includes('versus')) {
+                    // Multiplayer filter (using Steam store data)
+                    if (multiplayerFilter.checked && card.dataset.isMultiplayer !== 'true') {
                         show = false;
                     }
                     
@@ -364,11 +548,12 @@
                 document.getElementById('game-count').textContent = visibleCount;
             }
             
-            // Add event listeners for filters
-            multiplayerFilter.addEventListener('change', applyFilters);
-            achievementsFilter.addEventListener('change', applyFilters);
-            minPlaytimeFilter.addEventListener('input', applyFilters);
-            searchFilter.addEventListener('input', applyFilters);
+            // Add event listeners for filters and sorting
+            sortBySelect.addEventListener('change', applyFiltersAndSort);
+            multiplayerFilter.addEventListener('change', applyFiltersAndSort);
+            achievementsFilter.addEventListener('change', applyFiltersAndSort);
+            minPlaytimeFilter.addEventListener('input', applyFiltersAndSort);
+            searchFilter.addEventListener('input', applyFiltersAndSort);
         }
         
         // Utility functions

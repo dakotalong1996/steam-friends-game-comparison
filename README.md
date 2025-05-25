@@ -5,10 +5,14 @@ A web application that allows you to compare Steam games between friends using t
 ## Features
 
 - Compare games between 2+ Steam friends
+- **Game thumbnails** - Visual game icons for easy identification
+- **Multiple sorting options** - Sort by total playtime, individual playtime, game name, or achievement completion percentage
+- **Achievement tracking** - View achievement completion percentages for both friends with visual progress bars
 - Filter by multiplayer games, achievements, playtime, and search
 - View individual and total playtime for each game
 - Direct links to Steam store pages
 - Responsive design with Steam-inspired styling
+- Real-time filtering and sorting without page reloads
 
 ## Setup
 

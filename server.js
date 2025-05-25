@@ -96,6 +96,78 @@ app.get('/api/gamedetails/:appid', async (req, res) => {
     }
 });
 
+// Get Steam Store details for a game (including tags/categories)
+app.get('/api/storedetails/:appid', async (req, res) => {
+    const { appid } = req.params;
+    
+    try {
+        const url = `https://store.steampowered.com/api/appdetails?appids=${appid}&filters=categories,genres`;
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data[appid] && data[appid].success && data[appid].data) {
+            const gameData = data[appid].data;
+            const categories = gameData.categories || [];
+            const genres = gameData.genres || [];
+            
+            // Check for multiplayer categories
+            const multiplayerCategories = [
+                1, // Multi-player
+                36, // Online PvP
+                38, // Online Co-op
+                27, // Cross-Platform Multiplayer
+                9, // Co-op
+                24, // Shared/Split Screen
+                37, // Local Multi-Player
+                39, // Shared/Split Screen Co-op
+                47 // LAN Co-op
+            ];
+            
+            const isMultiplayer = categories.some(cat => multiplayerCategories.includes(cat.id));
+            
+            res.json({ 
+                success: true, 
+                categories: categories.map(cat => ({ id: cat.id, description: cat.description })),
+                genres: genres.map(genre => ({ id: genre.id, description: genre.description })),
+                isMultiplayer: isMultiplayer
+            });
+        } else {
+            res.json({ success: false, error: 'Store details not found' });
+        }
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// Get player achievements for a specific game
+app.get('/api/achievements/:steamid/:appid', async (req, res) => {
+    const { steamid, appid } = req.params;
+    
+    try {
+        const url = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/?appid=${appid}&key=${STEAM_API_KEY}&steamid=${steamid}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.playerstats && data.playerstats.achievements) {
+            const achievements = data.playerstats.achievements;
+            const completed = achievements.filter(a => a.achieved === 1).length;
+            const total = achievements.length;
+            const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+            
+            res.json({ 
+                success: true, 
+                completed,
+                total,
+                percentage
+            });
+        } else {
+            res.json({ success: false, error: 'Achievement data not found' });
+        }
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Steam Game Comparison server running at http://localhost:${PORT}`);
 });
